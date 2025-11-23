@@ -1,195 +1,155 @@
 # streamlit_app.py
-# 실행: streamlit run --server.port 3000 --server.address 0.0.0.0 streamlit_app.py
-
-import numpy as np
-import pandas as pd
-import xarray as xr
-import matplotlib.pyplot as plt
-from matplotlib.colors import TwoSlopeNorm
-from matplotlib import cm
 import streamlit as st
-
-# 🔵 Cartopy
+import xarray as xr
+import numpy as np
+import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import datetime
 
-# 🔤 한글 폰트 (Pretendard-Bold.ttf)
+# --- Pretendard-Bold.ttf 폰트 강제 등록 ---
+import matplotlib
 from matplotlib import font_manager as fm, rcParams
 from pathlib import Path
-font_path = Path("fonts/Pretendard-Bold.ttf").resolve()
-if font_path.exists():
-    fm.fontManager.addfont(str(font_path))
-    font_prop = fm.FontProperties(fname=str(font_path))
-    rcParams["font.family"] = font_prop.get_name()
-else:
-    font_prop = fm.FontProperties()
-rcParams["axes.unicode_minus"] = False
+from matplotlib.colors import TwoSlopeNorm
 
-# -------------------------------------------------
-# ✅ ERDDAP: SOEST Hawaii 인스턴스 한 곳만 사용 (고정)
-#   - OISST v2.1 (AVHRR) anomaly 포함
-#   - 이 인스턴스는 현재 2024-12-31까지 제공됨
-# -------------------------------------------------
-ERDDAP_URL = "https://erddap.aoml.noaa.gov/hdb/erddap/griddap/SST_OI_DAILY_1981_PRESENT_T"
-
-def _open_ds(url_base: str):
-    """서버 설정에 따라 .nc 필요할 수 있어 두 번 시도 (동일 엔드포인트 고정)."""
-    try:
-        return xr.open_dataset(url_base, decode_times=True)
-    except Exception:
-        return xr.open_dataset(url_base + ".nc", decode_times=True)
-
-def _standardize_anom_field(ds: xr.Dataset, target_time: pd.Timestamp) -> xr.DataArray:
+def force_pretendard_font():
     """
-    - 변수: 'anom'
-    - 깊이 차원(있다면): 표층 선택
-    - 좌표명: latitude/longitude → lat/lon 통일
-    - 시간: 데이터 커버리지 바깥이면 경계로 클램프 후 'nearest'
+    앱 폴더 fonts/Pretendard-Bold.ttf 를 강제로 등록해 한글 표시를 보장
     """
-    da = ds["anom"]
-
-    # 깊이 차원 표층 선택
-    for d in ["zlev", "depth", "lev"]:
-        if d in da.dims:
-            da = da.sel({d: da[d].values[0]})
-            break
-
-    # 시간 클램프 + nearest (멀리 점프 방지)
-    times = pd.to_datetime(ds["time"].values)
-    tmin, tmax = times.min(), times.max()
-    if target_time < tmin:
-        target_time = tmin
-    elif target_time > tmax:
-        target_time = tmax
-    da = da.sel(time=target_time, method="nearest").squeeze(drop=True)
-
-    # 좌표명 통일
-    rename_map = {}
-    if "latitude" in da.coords:  rename_map["latitude"]  = "lat"
-    if "longitude" in da.coords: rename_map["longitude"] = "lon"
-    if rename_map:
-        da = da.rename(rename_map)
-
-    return da
-
-# -----------------------------
-# 데이터 접근 (SOEST만 사용)
-# -----------------------------
-@st.cache_data(show_spinner=False)
-def list_available_times() -> pd.DatetimeIndex:
-    ds = _open_ds(ERDDAP_URL)
-    times = pd.to_datetime(ds["time"].values)
-    ds.close()
-    return pd.DatetimeIndex(times)
-
-@st.cache_data(show_spinner=True)
-def load_anomaly(date: pd.Timestamp, bbox=None) -> xr.DataArray:
-    """
-    선택 날짜의 anomaly(°C) 2D 필드 반환.
-    bbox=(lat_min, lat_max, lon_min, lon_max); 경도 -180~180.
-    날짜 변경선 횡단 시 자동 분할-결합.
-    """
-    ds = _open_ds(ERDDAP_URL)
-    da = _standardize_anom_field(ds, date)
-
-    # bbox 슬라이스
-    if bbox is not None:
-        lat_min, lat_max, lon_min, lon_max = bbox
-
-        # 위도
-        if lat_min <= lat_max:
-            da = da.sel(lat=slice(lat_min, lat_max))
-        else:
-            da = da.sel(lat=slice(lat_max, lat_min))
-
-        # 경도 (+ 날짜변경선 처리)
-        if lon_min <= lon_max:
-            da = da.sel(lon=slice(lon_min, lon_max))
-        else:
-            left  = da.sel(lon=slice(lon_min, 180))
-            right = da.sel(lon=slice(-180, lon_max))
-            da = xr.concat([left, right], dim="lon")
-
-    ds.close()
-    return da
-
-# -----------------------------
-# Cartopy Plot
-# -----------------------------
-def plot_cartopy_anomaly(
-    da: xr.DataArray,
-    title: str,
-    vabs: float = 5.0,
-    projection=ccrs.Robinson(),
-    extent=None,
-):
-    fig = plt.figure(figsize=(12.5, 6.5))
-    ax = plt.axes(projection=projection)
-
-    ax.add_feature(cfeature.LAND, facecolor="lightgray", zorder=0)
-    ax.add_feature(cfeature.COASTLINE, linewidth=0.6, zorder=3)
-    ax.add_feature(cfeature.BORDERS, linewidth=0.4, zorder=3)
-
-    if extent is not None:
-        lon_min, lon_max, lat_min, lat_max = extent
-        ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
+    font_path = Path(__file__).parent / "fonts" / "Pretendard-Bold.ttf"
+    if font_path.exists():
+        fm.fontManager.addfont(str(font_path))
+        font_name = fm.FontProperties(fname=str(font_path)).get_name()
+        rcParams["font.family"] = font_name
+        rcParams["axes.unicode_minus"] = False
+        return True
     else:
-        ax.set_global()
+        rcParams["axes.unicode_minus"] = False
+        return False
 
-    cmap = cm.get_cmap("RdBu_r").copy()
-    norm = TwoSlopeNorm(vmin=-vabs, vcenter=0.0, vmax=vabs)
+HAS_KR_FONT = force_pretendard_font()
 
-    if "lon" in da.coords:
-        da = da.sortby("lon")
 
-    im = ax.pcolormesh(
-        da["lon"], da["lat"], da.values,
-        transform=ccrs.PlateCarree(),
-        cmap=cmap, norm=norm, shading="auto", zorder=2
+# --- Streamlit 기본 설정 ---
+st.set_page_config(layout="wide", page_title="NOAA OISST 해수면 온도 시각화")
+st.title("NOAA 일일 해수면 온도(OISST) 자동 시각화")
+st.markdown("데이터 소스: [NOAA PSL OISST v2 High Resolution](https://psl.noaa.gov/data/gridded/data.noaa.oisst.v2.highres.html)")
+
+# --- 연도별 데이터 소스 URL (OPeNDAP) ---
+BASE_URL = "https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.oisst.v2.highres/sst.day.mean.{year}.nc"
+
+# --- 데이터 로딩 함수 ---
+@st.cache_data(show_spinner=False)
+def load_and_slice_data(selected_date: datetime.date):
+    """
+    선택한 날짜(YYYY-MM-DD)의 한국/동중국해 인근(위도 28~42N, 경도 120~135E) SST를 로드.
+    연도별 파일만 제공되므로 selected_date.year로 파일을 선택.
+    """
+    year = selected_date.year
+    data_url = BASE_URL.format(year=year)
+    date_str = selected_date.strftime("%Y-%m-%d")
+
+    try:
+        # 1차 시도: 기본 엔진(netCDF4/requests 등)
+        try:
+            ds = xr.open_dataset(data_url)
+        except Exception:
+            # 2차 시도: pydap 백업
+            ds = xr.open_dataset(data_url, engine="pydap")
+
+        # 변수 선택 및 시간/공간 슬라이스
+        # 경도는 0~360 체계(120~135E 그대로 사용 가능)
+        da = (
+            ds["sst"]
+            .sel(time=date_str, lat=slice(28, 42), lon=slice(120, 135))
+            .squeeze()
+        )
+
+        # 실제 값 로드
+        da.load()
+
+        # 결측/마스킹 처리를 위한 간단한 방어
+        if hasattr(da, "values") and np.all(np.isnan(da.values)):
+            return None
+
+        return da
+
+    except Exception as e:
+        st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+        st.info("연도별 파일만 제공됩니다. 네트워크(방화벽/SSL) 또는 엔진(pydap, netCDF4) 설치 문제일 수 있어요.")
+        return None
+
+# --- 지도 시각화 함수 ---
+def create_map_figure(data_array, selected_date):
+    if data_array is None or getattr(data_array, "size", 0) == 0:
+        return None
+
+    fig, ax = plt.subplots(
+        figsize=(10, 8),
+        subplot_kw={"projection": ccrs.PlateCarree()}
     )
 
-    cbar = plt.colorbar(im, ax=ax, orientation="horizontal", pad=0.03, fraction=0.04, shrink=0.9)
-    cbar.set_label("해수면 온도 편차 (°C, 1971–2000 기준)", fontproperties=font_prop)
+    norm = TwoSlopeNorm(vmin=20, vcenter=30, vmax=34)
 
-    ax.set_title(title, pad=8, fontproperties=font_prop)
+    im = data_array.plot.pcolormesh(
+        ax=ax,
+        x="lon",
+        y="lat",
+        transform=ccrs.PlateCarree(),
+        cmap="YlOrRd",
+        norm=norm,        # ← 핵심
+        add_colorbar=False
+    )
+
+    ax.coastlines()
+    ax.add_feature(cfeature.LAND, zorder=1, facecolor="lightgray", edgecolor="black")
+
+    try:
+        gl = ax.gridlines(draw_labels=True, linewidth=1, color="gray", alpha=0.5, linestyle="--")
+        gl.top_labels = False
+        gl.right_labels = False
+    except Exception:
+        ax.gridlines(linewidth=1, color="gray", alpha=0.5, linestyle="--")
+
+    cbar = fig.colorbar(im, ax=ax, orientation="vertical", pad=0.05, aspect=40)
+    cbar.set_label("해수면 온도 (°C)")
+    ax.set_title(f"해수면 온도: {selected_date.strftime('%Y년 %m월 %d일')}", fontsize=16)
+
     fig.tight_layout()
     return fig
 
-# -----------------------------
-# UI
-# -----------------------------
-st.sidebar.header("🛠️ 보기 옵션")
 
-# 날짜 범위 = SOEST 실제 커버리지로 제한
-with st.spinner("사용 가능한 날짜 불러오는 중..."):
-    times = list_available_times()
-tmin, tmax = times.min().date(), times.max().date()
-
-# ✅ 기본 시작일 = 2024-08-15 (커버리지 범위 바깥이면 자동 조정)
-DEFAULT_START = pd.Timestamp("2024-08-15")
-if DEFAULT_START.date() < tmin:
-    default_date = times[0]
-elif DEFAULT_START.date() > tmax:
-    default_date = times[-1]
-else:
-    default_date = DEFAULT_START
-
-date = st.sidebar.date_input(
-    "날짜 선택",
-    value=default_date.date(),
-    min_value=tmin,
-    max_value=tmax,
+# --- 사이드바 UI ---
+st.sidebar.header("날짜 선택")
+# 최신 데이터 지연을 고려해 2일 전을 기본값으로 설정
+default_date = datetime.date.today() - datetime.timedelta(days=2)
+selected_date = st.sidebar.date_input(
+    "보고 싶은 날짜를 선택하세요",
+    value=default_date,
+    min_value=datetime.date(1981, 9, 1),
+    max_value=default_date,
 )
-date = pd.Timestamp(date)
 
-# 영역 프리셋
-preset = st.sidebar.selectbox(
-    "영역 선택",
-    [
-        "전 지구",
-        "동아시아(한국 포함)",
-종
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+# --- 메인 로직 ---
+if selected_date:
+    with st.spinner(f"{selected_date:%Y-%m-%d} 데이터를 불러오는 중..."):
+        sst_data = load_and_slice_data(selected_date)
+
+    if sst_data is not None and sst_data.size > 0:
+        st.subheader(f"{selected_date:%Y년 %m월 %d일} 해수면 온도 지도")
+        fig = create_map_figure(sst_data, selected_date)
+        if fig:
+            st.pyplot(fig, clear_figure=True)
+
+        with st.expander("데이터 미리보기"):
+            # 좌표/속성 확인에 유용
+            st.write(sst_data)
+            st.caption(
+                f"lat: {float(sst_data.lat.min())}~{float(sst_data.lat.max())}, "
+                f"lon: {float(sst_data.lon.min())}~{float(sst_data.lon.max())}"
+            )
+    elif sst_data is not None:
+        st.warning("선택하신 날짜에 해당하는 데이터가 없습니다. 다른 날짜를 선택해 주세요.")
+    else:
+        st.stop()

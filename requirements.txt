@@ -1,9 +1,7 @@
 streamlit
-numpy
-pandas
-matplotlib
 xarray
 netCDF4
+pydap
+matplotlib
 cartopy
-shapely
-pyproj
+numpy
